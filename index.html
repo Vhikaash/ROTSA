@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rotsa - Digital Seettu</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;background:#0f1220;color:#e8eaf3}
+  h1{margin-bottom:4px} .sub{color:#9aa3c0;margin-top:0}
+  textarea,input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #2c3354;background:#171b30;color:#e8eaf3;font-size:15px}
+  button{padding:10px 18px;border:0;border-radius:8px;background:#5b6cff;color:#fff;font-size:15px;cursor:pointer;margin-top:8px}
+  .card{background:#171b30;border:1px solid #2c3354;border-radius:12px;padding:16px;margin:16px 0}
+  table{width:100%;border-collapse:collapse;font-size:14px} th,td{padding:8px;border-bottom:1px solid #2c3354;text-align:left}
+  .tag{display:inline-block;background:#232a4d;border-radius:6px;padding:3px 8px;margin:2px;font-size:13px}
+  .ok{color:#5be3a0} .warn{color:#ffb84d} pre{white-space:pre-wrap;color:#9aa3c0;font-size:13px}
+</style>
+</head>
+<body>
+<h1>Rotsa</h1>
+<p class="sub">Describe your Seettu in plain language. We turn it into rules and a payout schedule.</p>
+
+<div class="card">
+  <label>Describe your Seettu</label>
+  <textarea id="nl" rows="3">10 people, Rs 5,000 monthly, random draw order, 2% late fee, starting 1 Nov 2026</textarea>
+  <label style="display:block;margin-top:10px">Member names (optional, comma separated)</label>
+  <input id="names" placeholder="Nimal, Kasun, Shagash, Nadhi ...">
+  <button onclick="build()">Generate Seettu</button>
+</div>
+
+<div id="out"></div>
+
+<script>
+let state = null;
+
+function parseRules(text, namesRaw){
+  const t = text.toLowerCase().replace(/,/g,'');
+  const rules = {};
+  let m = t.match(/(\d+)\s*(people|members|persons|friends)/);
+  rules.members = m ? parseInt(m[1]) : null;
+  m = t.match(/(?:rs\.?|lkr)\s*([\d]+)/);
+  rules.amount = m ? parseInt(m[1]) : null;
+  rules.frequency = /weekly/.test(t) ? 'weekly' : /fortnight|biweekly/.test(t) ? 'fortnightly' : 'monthly';
+  rules.order = /random|draw|lottery/.test(t) ? 'random' : 'fixed';
+  m = t.match(/(\d+(?:\.\d+)?)\s*%/);
+  rules.lateFeePercent = m ? parseFloat(m[1]) : 0;
+  m = t.match(/(\d{1,2})\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(\d{4})?/);
+  const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  if(m){ rules.start = new Date(m[3]?+m[3]:new Date().getFullYear(), months.indexOf(m[2]), +m[1]); }
+  else { rules.start = new Date(); }
+  const names = namesRaw.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!rules.members) rules.members = names.length || null;
+  rules.names = names;
+  return rules;
+}
+
+function addPeriod(d, freq, i){
+  const x = new Date(d);
+  if(freq==='weekly') x.setDate(x.getDate()+7*i);
+  else if(freq==='fortnightly') x.setDate(x.getDate()+14*i);
+  else x.setMonth(x.getMonth()+i);
+  return x;
+}
+
+function shuffle(a){ a=[...a]; for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]];} return a; }
+
+function build(){
+  const rules = parseRules(document.getElementById('nl').value, document.getElementById('names').value);
+  const out = document.getElementById('out');
+  if(!rules.members || !rules.amount){
+    out.innerHTML = '<div class="card warn">Could not find the number of members or the amount. Try: "8 people, Rs 3000 monthly".</div>';
+    return;
+  }
+  const n = rules.members;
+  let people = [];
+  for(let i=0;i<n;i++) people.push(rules.names[i] || ('Member '+(i+1)));
+  const order = rules.order==='random' ? shuffle(people) : people;
+  const rounds = order.map((p,i)=>({
+    round:i+1, due:addPeriod(rules.start, rules.frequency, i), recipient:p,
+    payout:rules.amount*n, paid:Array(n).fill(false)
+  }));
+  state = {rules, people, rounds};
+  render();
+}
+
+function togglePaid(r, k){ state.rounds[r].paid[k] = !state.rounds[r].paid[k]; render(); }
+
+function render(){
+  const {rules, people, rounds} = state;
+  const fmt = d => d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  const money = v => 'Rs ' + v.toLocaleString();
+  let html = '<div class="card"><b>Structured rules</b><br>' +
+    `<span class="tag">${rules.members} members</span><span class="tag">${money(rules.amount)} ${rules.frequency}</span>` +
+    `<span class="tag">${rules.order} order</span><span class="tag">late fee ${rules.lateFeePercent}%</span>` +
+    `<span class="tag">starts ${fmt(rules.start)}</span><span class="tag">pot per round ${money(rules.amount*rules.members)}</span>` +
+    '<pre>' + JSON.stringify({...rules, start: rules.start.toISOString().slice(0,10)}, null, 2) + '</pre></div>';
+  html += '<div class="card"><b>Payout schedule</b><table><tr><th>#</th><th>Due</th><th>Receives</th><th>Pot</th><th>Collected</th><th>Mark paid</th></tr>';
+  rounds.forEach((r,ri)=>{
+    const done = r.paid.filter(Boolean).length;
+    html += `<tr><td>${r.round}</td><td>${fmt(r.due)}</td><td>${r.recipient}</td><td>${money(r.payout)}</td>` +
+      `<td class="${done===people.length?'ok':''}">${done}/${people.length}</td><td>` +
+      people.map((p,k)=>`<label style="margin-right:6px"><input type="checkbox" style="width:auto" ${r.paid[k]?'checked':''} onchange="togglePaid(${ri},${k})"> ${k+1}</label>`).join('') +
+      '</td></tr>';
+  });
+  html += '</table></div>';
+  document.getElementById('out').innerHTML = html;
+}
+</script>
+</body>
+</html>
